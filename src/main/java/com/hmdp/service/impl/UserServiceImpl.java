@@ -96,6 +96,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         return Result.ok();
     }
 
+    //补签功能
+    @Override
+    public Result sign2(int monthday) {
+        //1.获取当前签到的用户的id
+        Long id = UserHolder.getUser().getId();
+        //2.获取当前的时间
+        LocalDateTime now = LocalDateTime.now();
+        //3.拼接key
+        String month = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+        String key = USER_SIGN_KEY + id + month;
+        //4.补签
+        stringRedisTemplate.opsForValue().setBit(key,monthday-1,true);
+        return Result.ok();
+    }
+
 
 
     //计算连续签到天数

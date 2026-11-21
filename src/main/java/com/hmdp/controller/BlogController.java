@@ -30,6 +30,7 @@ public class BlogController {
     @Resource
     private IBlogService blogService;
 
+    //保存博客
     @PostMapping
     public Result saveBlog(@RequestBody Blog blog) {
         return blogService.saveBlog(blog);

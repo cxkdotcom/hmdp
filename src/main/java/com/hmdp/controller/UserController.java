@@ -103,7 +103,11 @@ public class UserController {
         return userService.sign();
         }
         //补签
-
+        @PostMapping("/sign/{monthday}")
+    public Result sign2(@PathVariable("monthday") int monthday){
+        return userService.sign2(monthday);
+    }
+        //连续签到天数
     @GetMapping("/sign/count")
     public Result signCount() {
         return userService.signCount();

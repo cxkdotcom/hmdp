@@ -21,7 +21,7 @@ public interface IUserService extends IService<User> {
 
     Result sign();
 
-
+    Result sign2(int monthday);
 
     Result signCount();
 }
