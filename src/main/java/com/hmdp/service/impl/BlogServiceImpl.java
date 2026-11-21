@@ -3,6 +3,7 @@ package com.hmdp.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.ScrollResult;
@@ -22,14 +23,10 @@ import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
-import static com.hmdp.utils.RedisConstants.BLOG_LIKED_KEY;
-import static com.hmdp.utils.RedisConstants.FEED_KEY;
+import static com.hmdp.utils.RedisConstants.*;
 
 /**
  * <p>
@@ -51,11 +48,27 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result queryBlogById(Long id) {
-        //根据blogid查询blog
+
+        //根据blogId查询blog
+        //1.先查Redis
+        String key = BLOG_KEY + id;
+        String blogStr = stringRedisTemplate.opsForValue().get(key);
+        if(StrUtil.isNotBlank(blogStr)) {
+            //2.若存在，返回博客
+            Blog blog = JSONUtil.toBean(blogStr, Blog.class);
+            //3.返回博客
+            blogUser(blog);
+            islike(blog);
+            return Result.ok(blog);
+        }
+        //4.若Redis中不存在，查询数据库
         Blog blog = getById(id);
         if(blog == null){
             return Result.fail("博客不存在");
         }
+        //5.blog存在就写入Redis做缓存，在返回博客
+        //5.1写入Redis
+        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(blog));
         //返回博客应该带有用户信息（所以这一步应该查询用户信息）
         blogUser(blog);
         islike(blog);
@@ -86,7 +99,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     public Result likeBlog(Long id) {
         //1.获取用户id
         Long userId = UserHolder.getUser().getId();
-        //2.用Redisd判断用户是否点赞
+        //2.用Redis判断用户是否点赞
         String key = BLOG_LIKED_KEY + id;
         Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
         //3.1如果未点赞，则数据库点赞数+1
@@ -136,21 +149,26 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         blog.setUserId(user.getId());
         // 保存探店博文
         boolean isSuccess = save(blog);
+        //3.如果保存失败，返回失败结果
         if (!isSuccess) {
             return Result.fail("上传博客失败");
         }
-        //3.现在需要将新键的博客id发到粉丝的收件箱（收件箱用Redis的sortedSet）
-        //3.1获取当前博主的粉丝（就是数据库中follow表中follow_user_id为当前博主id的用户）
-        List<Follow> follows = followService.query().eq("follow_user_id", blog.getUserId()).list();
-        //3.2将当前博客的id发给每个粉丝（每个粉丝的id作为key，博客id作为值）
+        //4.保存成功，博客信息加入Redis做缓存，方便后续查询
         Long blogId = blog.getId();
+        //4.1.以blogId为Redis key
+        String key = BLOG_KEY + blogId;
+        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(blog));
+        //5.现在需要将新键的博客id发到粉丝的收件箱（收件箱用Redis的sortedSet）
+        //5.1获取当前博主的粉丝（就是数据库中follow表中follow_user_id为当前博主id的用户）
+        List<Follow> follows = followService.query().eq("follow_user_id", blog.getUserId()).list();
+        //5.2将当前博客的id发给每个粉丝（每个粉丝的id作为key，博客id作为值）
         follows.forEach(follow -> {
             //获取每个分数的id作为key
             Long userId = follow.getUserId();
-            String key = FEED_KEY + userId;
-            stringRedisTemplate.opsForZSet().add(key,blogId.toString(),System.currentTimeMillis());
+            String feedKey = FEED_KEY + userId;
+            stringRedisTemplate.opsForZSet().add(feedKey,blogId.toString(),System.currentTimeMillis());
         });
-        // 返回id
+        // 6.返回id
         return Result.ok(blog.getId());
     }
 
@@ -172,9 +190,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         int os = 1;
         for (ZSetOperations.TypedTuple<String> tuple : typedTuples) {
             //4.1获取每个用户的id
-            ids.add(Long.valueOf(tuple.getValue()));
+            ids.add(Long.valueOf(Objects.requireNonNull(tuple.getValue())));
             //4.2获取分数
-            long time = tuple.getScore().longValue();
+            long time = Objects.requireNonNull(tuple.getScore()).longValue();
             if(time == minTime) {
                 os++;
             } else {
@@ -218,7 +236,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             return;
         }
         Long userId = UserHolder.getUser().getId();
-        //2.用Redisd判断用户是否点赞
+        //2.用Redis判断用户是否点赞
         String key = BLOG_LIKED_KEY + blog.getId();
         Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
         blog.setIsLike(score != null);
